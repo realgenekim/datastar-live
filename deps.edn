@@ -1,0 +1,13 @@
+{:paths ["src"]
+
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+        hiccup/hiccup {:mvn/version "2.0.0"}
+        dev.data-star.clojure/http-kit {:mvn/version "1.0.0-RC8"}}
+
+ :aliases
+ {:test {:extra-paths ["test"]
+         :main-opts ["-m" "datastar-live.test-runner"]}
+
+  :test-rc11 {:extra-paths ["test"]
+              :override-deps {dev.data-star.clojure/http-kit {:mvn/version "1.0.0-RC11"}}
+              :main-opts ["-m" "datastar-live.test-runner"]}}}
