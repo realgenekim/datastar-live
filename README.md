@@ -15,7 +15,7 @@ failed writers, target reconnect paint to the connecting stream, and impose no
 hidden maximum stream lifetime.
 
 ```clojure
-realgenekim/datastar-live
+io.github.realgenekim/datastar-live
 {:git/url "https://github.com/realgenekim/datastar-live.git"
  :git/sha "<pin-an-immutable-sha>"}
 ```
