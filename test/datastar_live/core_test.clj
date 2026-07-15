@@ -164,6 +164,7 @@
                        :queue-capacity 1
                        :on-event #(swap! events conj %)})
         gen (at/->sse-recorder)
+        rejected-gen (at/->sse-recorder)
         started (promise)
         release (promise)]
     (with-redefs [hk/->sse-response (callbacks-response captured)]
@@ -176,6 +177,10 @@
       (is (= 1 (live/publish! hub (constantly nil))))
       (is (zero? (live/publish! hub (constantly nil))))
       (is (some #(= :queue-full (:event %)) @events))
+      (live/sse-response hub {} {:on-connect (constantly nil)})
+      ((get @captured hk/on-open) rejected-gen)
+      (is (= [gen] (live/connections hub))
+          "a connection whose mandatory initial paint cannot queue is retired")
       (deliver release true)
       (is (true? (live/await-idle! hub))))
     (live/stop! hub)))

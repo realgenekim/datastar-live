@@ -38,6 +38,7 @@
    Options:
    - `:id` required keyword, used only for identity and telemetry.
    - `:on-event` optional callback receiving lifecycle maps.
+   - `:queue-capacity` positive integer, default 1024.
 
    Broadcast work is serialized on one daemon writer. There is no timer or
    per-connection sleeping future."
@@ -213,10 +214,15 @@
        (locking (:enqueue-lock hub)
          (when (register! hub sse-gen connection-data)
            (when on-connect
-             (submit! hub
-                      (reify Runnable
-                        (run [_]
-                          (send! hub sse-gen on-connect))))))))
+             (when-not
+              (submit! hub
+                       (reify Runnable
+                         (run [_]
+                           (send! hub sse-gen on-connect))))
+               ;; A browser without its authoritative first paint is not a
+               ;; usable subscriber. Fail closed and let Datastar reconnect.
+               (retire! hub sse-gen)
+               (try (d*/close-sse! sse-gen) (catch Throwable _)))))))
 
      hk/on-close
      (fn [sse-gen _status]
