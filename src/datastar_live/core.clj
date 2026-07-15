@@ -139,13 +139,21 @@
 
 (defn send!
   "Synchronously and serially apply `write-fn` to one registered generator.
-   Returns false and retires the connection when the write throws."
+   Returns false and retires the connection when the write throws or returns
+   false. The Datastar http-kit adapter uses a false return (rather than an
+   exception) when the underlying AsyncChannel is no longer writable."
   [hub sse-gen write-fn]
   (if-not (contains? (:connections @(:state hub)) sse-gen)
     false
     (try
-      (d*/lock-sse! sse-gen (write-fn sse-gen))
-      true
+      (if (false? (d*/lock-sse! sse-gen (write-fn sse-gen)))
+        (do
+          (record-write-failure!
+           hub sse-gen
+           (ex-info "SSE write returned false"
+                    {:reason :write-returned-false}))
+          false)
+        true)
       (catch Throwable error
         (record-write-failure! hub sse-gen error)
         false))))

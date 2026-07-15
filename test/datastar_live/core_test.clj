@@ -73,6 +73,24 @@
       (is (= 1 (:write-failures (live/stats hub)))))
     (live/stop! hub)))
 
+(deftest false-write-result-retires-dead-http-kit-connection
+  (let [captured (atom nil)
+        events (atom [])
+        hub (live/hub {:id ::false-write
+                       :on-event #(swap! events conj %)})
+        gen (at/->sse-recorder)]
+    (with-redefs [hk/->sse-response (callbacks-response captured)]
+      (live/sse-response hub {})
+      ((get @captured hk/on-open) gen)
+      (is (false? (live/send! hub gen (constantly false))))
+      (is (zero? (live/subscriber-count hub)))
+      (is (= 1 (:write-failures (live/stats hub))))
+      (is (= [:connected :disconnected :write-failed]
+             (mapv :event @events)))
+      (is (= :write-returned-false
+             (-> @events last :error ex-data :reason))))
+    (live/stop! hub)))
+
 (deftest local-view-owns-route-region-scope-and-refresh
   (let [captured (atom nil)
         rendered (atom [])
