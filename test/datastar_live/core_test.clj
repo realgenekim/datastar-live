@@ -12,6 +12,15 @@
     (reset! captured opts)
     {:status 200 :body :stream}))
 
+(defn- wait-until [timeout-ms pred]
+  (let [deadline (+ (System/nanoTime) (* timeout-ms 1000000))]
+    (loop []
+      (if (pred)
+        true
+        (if (< (System/nanoTime) deadline)
+          (do (Thread/sleep 5) (recur))
+          false)))))
+
 (deftest lifecycle-registration-is-private-and-idempotent
   (let [captured (atom nil)
         events (atom [])
@@ -88,19 +97,64 @@
       (is (= [:connected :disconnected :write-failed]
              (mapv :event @events)))
       (is (= :write-returned-false
-             (-> @events last :error ex-data :reason))))
+             (-> @events last :retirement-reason))))
+    (live/stop! hub)))
+
+(deftest lifecycle-telemetry-is-bounded-and-privacy-safe
+  (let [captured (atom nil)
+        events (atom [])
+        hub (live/hub {:id ::telemetry
+                       :recent-retirements-limit 2
+                       :on-event #(swap! events conj %)})
+        secret "never-emit-this-secret"
+        generators (repeatedly 3 at/->sse-recorder)]
+    (with-redefs [hk/->sse-response (callbacks-response captured)]
+      (doseq [gen generators]
+        (live/sse-response hub {} {:connection-data {:access-token secret}})
+        ((get @captured hk/on-open) gen)
+        (is (= #{:connection-id :opened-at-ms :phase
+                 :last-successful-write-at-ms :last-heartbeat-at-ms
+                 :successful-writes}
+               (set (keys (first (live/connection-stats hub))))))
+        (is (true? (live/send! hub gen (constantly true))))
+        ((get @captured hk/on-close) gen (Object.))))
+    (let [stats (live/stats hub)]
+      (is (= 3 (:opened stats)))
+      (is (= 3 (:closed stats)))
+      (is (= 2 (count (:recent-retirements stats))))
+      (is (= {:on-close 3} (:retired-by stats)))
+      (is (every? #(= :on-close (:retirement-reason %))
+                  (:recent-retirements stats)))
+      (is (not (str/includes? (pr-str stats) secret)))
+      (is (not (str/includes? (pr-str @events) secret))))
+    (live/stop! hub)))
+
+(deftest heartbeat-retires-an-sdk-generator-that-reports-write-failure
+  (let [captured (atom nil)
+        hub (live/hub {:id ::heartbeat-failure
+                       :heartbeat-ms 10
+                       :max-age-ms 1000})
+        gen (at/->sse-recorder)]
+    (with-redefs [hk/->sse-response (callbacks-response captured)
+                  d*/patch-signals! (constantly false)]
+      (live/sse-response hub {})
+      ((get @captured hk/on-open) gen)
+      (is (wait-until 500 #(zero? (live/subscriber-count hub))))
+      (is (= 1 (:write-failures (live/stats hub))))
+      (is (= 1 (get-in (live/stats hub)
+                       [:retired-by :write-returned-false]))))
     (live/stop! hub)))
 
 (deftest local-view-owns-route-region-scope-and-refresh
   (let [captured (atom nil)
         rendered (atom [])
         view (live/local-view
-              {:id ::status
-               :path "/api/live/status"
-               :scope #(get-in % [:identity :account])
-               :render (fn [scope]
-                         (swap! rendered conj scope)
-                         [:span.status (str "account " scope)])})
+               {:id ::status
+                :path "/api/live/status"
+                :scope #(get-in % [:identity :account])
+                :render (fn [scope]
+                          (swap! rendered conj scope)
+                          [:span.status (str "account " scope)])})
         [_ route-data] (live/route view)
         handler (get-in route-data [:get :handler])
         region (live/region view {:class "slot"})
@@ -189,8 +243,8 @@
       (live/sse-response hub {})
       ((get @captured hk/on-open) gen)
       (is (= 1 (live/publish! hub (fn [_]
-                                   (deliver started true)
-                                   @release))))
+                                    (deliver started true)
+                                    @release))))
       (is (true? (deref started 1000 false)))
       (is (= 1 (live/publish! hub (constantly nil))))
       (is (zero? (live/publish! hub (constantly nil))))
