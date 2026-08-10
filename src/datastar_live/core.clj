@@ -187,7 +187,7 @@
                       (.size (.getQueue ^ThreadPoolExecutor (:writer hub)))
                       0)
      :scheduled-tasks (.size (.getQueue ^ScheduledThreadPoolExecutor
-                                        (:scheduler hub)))}))
+                               (:scheduler hub)))}))
 
 (defn- register!
   ([hub sse-gen connection-data]
@@ -561,7 +561,7 @@
                 {:id (:region-id view)
                  :data-star-init
                  (str "@get('" (:path view)
-                      "',{retry:'always',retryMaxCount:1000000})")})]))
+                      "',{openWhenHidden:false,retry:'always',retryMaxCount:1000000})")})]))
 
 (defn refresh!
   "Render and queue current authoritative state for one scope. Returns the

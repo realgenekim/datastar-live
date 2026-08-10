@@ -164,6 +164,8 @@
     (is (= "slot" (get-in region [1 :class])))
     (is (str/starts-with? (get-in region [1 :id]) "datastar-live-"))
     (is (str/includes? (get-in region [1 :data-star-init]) "/api/live/status"))
+    (is (str/includes? (get-in region [1 :data-star-init]) "openWhenHidden:false"))
+    (is (str/includes? (get-in region [1 :data-star-init]) "retry:'always'"))
     (is (= {:status 204 :body ""} (handler {})))
 
     (with-redefs [hk/->sse-response (callbacks-response captured)]
