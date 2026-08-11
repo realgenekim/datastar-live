@@ -175,11 +175,13 @@
       ((get @captured hk/on-open) gen-b)
       (is (true? (live/await-idle! (:hub view))))
       (is (= [:a :b] @rendered))
+      (is (= #{:a :b} (live/connected-scopes view)))
 
       (reset! rendered [])
       (is (= 1 (live/refresh! view :a)))
       (is (true? (live/await-idle! (:hub view))))
       (is (= [:a] @rendered))
+      (is (= #{:a :b} (live/connected-scopes view)))
       (is (= 2 (:connections (live/stats view)))))
     (live/stop! view)))
 

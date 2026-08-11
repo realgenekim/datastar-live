@@ -584,14 +584,18 @@
            {d*/selector (str "#" (:region-id view))
             d*/patch-mode d*/pm-inner})))))
 
+(defn connected-scopes
+  "Return the stable scopes with at least one live connection to this view."
+  [view]
+  (->> (:connections @(:state (:hub view)))
+       vals
+       (keep #(get-in % [:data :scope]))
+       set))
+
 (defn refresh-all!
   "Refresh every currently connected scope once."
   [view]
-  (let [scopes (->> (:connections @(:state (:hub view)))
-                    vals
-                    (keep #(get-in % [:data :scope]))
-                    set)]
-    (reduce + (map #(refresh! view %) scopes))))
+  (reduce + (map #(refresh! view %) (connected-scopes view))))
 
 (defn view-stats [view]
   (assoc (stats (:hub view))
