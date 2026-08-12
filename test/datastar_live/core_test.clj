@@ -185,6 +185,45 @@
       (is (= 2 (:connections (live/stats view)))))
     (live/stop! view)))
 
+(deftest scoped-regions-isolate-two-live-scopes
+  (let [captured (atom nil)
+        view (live/local-view
+               {:id ::scoped-status
+                :path "/api/live/scoped-status"
+                :scope #(get-in % [:path-params :account])
+                :render (fn [scope] [:span.status (str "account " scope)])})
+        [_ route-data] (live/route view)
+        handler (get-in route-data [:get :handler])
+        region-a (live/scoped-region view "a")
+        region-b (live/scoped-region view "b")
+        id-a (get-in region-a [1 :id])
+        id-b (get-in region-b [1 :id])
+        gen-a (at/->sse-recorder)
+        gen-b (at/->sse-recorder)]
+    (is (not= id-a id-b) "every persistent scope owns a distinct DOM target")
+    (is (str/includes? (get-in region-a [1 :data-star-init]) id-a))
+    (is (str/includes? (get-in region-b [1 :data-star-init]) id-b))
+    (with-redefs [hk/->sse-response (callbacks-response captured)]
+      (handler {:path-params {:account "a"}
+                :query-params {"datastar-live-region" id-a}})
+      ((get @captured hk/on-open) gen-a)
+      (handler {:path-params {:account "b"}
+                :query-params {"datastar-live-region" id-b}})
+      ((get @captured hk/on-open) gen-b)
+      (is (true? (live/await-idle! (:hub view))))
+      (let [events-a @(.-!rec gen-a)
+            events-b @(.-!rec gen-b)]
+        (is (some #(str/includes? % (str "data: selector #" id-a)) events-a))
+        (is (not-any? #(str/includes? % (str "data: selector #" id-b)) events-a))
+        (is (some #(str/includes? % (str "data: selector #" id-b)) events-b))
+        (is (not-any? #(str/includes? % (str "data: selector #" id-a)) events-b)))
+      (let [before-b (count @(.-!rec gen-b))]
+        (is (= 1 (live/refresh! view "a")))
+        (is (true? (live/await-idle! (:hub view))))
+        (is (= before-b (count @(.-!rec gen-b)))
+            "refreshing scope a must not write to scope b")))
+    (live/stop! view)))
+
 (deftest region-rejects-transport-overrides
   (let [view (live/local-view {:id ::reserved
                                :path "/api/live/reserved"

@@ -76,6 +76,13 @@ submission. It never claims network delivery. A write result other than exact
 
 `local-view` is process-local. It is not a distributed invalidation system.
 
+For a parameterized view that may replace one scope with another in the same
+page, mount `(live/scoped-region status-view scope)` instead of `region`. Its
+DOM target is derived from both the view and scope, and the route validates the
+target against the request-resolved scope. A delayed stream for scope A can
+therefore never patch scope B's mount. Existing `region` callers retain the
+single stable target contract.
+
 ## Operational telemetry
 
 `stats` exposes aggregate open, close, accepted-write, failed-write, heartbeat,

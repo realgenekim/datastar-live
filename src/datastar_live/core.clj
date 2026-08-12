@@ -512,22 +512,34 @@
     (throw (ex-info "local-view :render must be a function" {})))
   (->LocalView id path scope render (hex-id id) (hub {:id id :on-event on-event})))
 
-(defn- rendered-html [view scope]
+(defn- scoped-region-id [view scope]
+  (hex-id [(:id view) scope]))
+
+(defn- requested-region-id [view request scope]
+  (if-let [requested (get-in request [:query-params "datastar-live-region"])]
+    (let [expected (scoped-region-id view scope)]
+      (when-not (= expected requested)
+        (throw (ex-info "local-view scoped region does not match request scope"
+                        {:view (:id view) :scope scope})))
+      expected)
+    (:region-id view)))
+
+(defn- rendered-html [view scope region-id]
   (let [html (str (h/html ((:render view) scope)))
         duplicate-id (re-pattern
                        (str "(?i)\\bid=[\\\"']"
-                            (java.util.regex.Pattern/quote (:region-id view))
+                            (java.util.regex.Pattern/quote region-id)
                             "[\\\"']"))]
     (when (re-find duplicate-id html)
       (throw (ex-info "local-view render must not reproduce its owned region id"
-                      {:view (:id view) :region-id (:region-id view)})))
+                      {:view (:id view) :region-id region-id})))
     html))
 
-(defn- write-view! [view sse-gen scope]
+(defn- write-view! [view sse-gen scope region-id]
   (d*/patch-elements!
     sse-gen
-    (rendered-html view scope)
-    {d*/selector (str "#" (:region-id view))
+    (rendered-html view scope region-id)
+    {d*/selector (str "#" region-id)
      d*/patch-mode d*/pm-inner}))
 
 (defn route
@@ -545,10 +557,11 @@
              (when-not (scope-key? scope)
                (throw (ex-info "local-view scope returned an unsupported key"
                                {:view (:id view) :scope scope})))
-             (sse-response
-               (:hub view) request
-               {:connection-data {:scope scope}
-                :on-connect #(write-view! view % scope)})))))}}])
+             (let [region-id (requested-region-id view request scope)]
+               (sse-response
+                 (:hub view) request
+                 {:connection-data {:scope scope :region-id region-id}
+                  :on-connect #(write-view! view % scope region-id)}))))))}}])
 
 (defn region
   "Render the stable view region and its generated app-lifetime subscription."
@@ -563,6 +576,27 @@
                  (str "@get('" (:path view)
                       "',{openWhenHidden:false,retry:'always',retryMaxCount:1000000})")})]))
 
+(defn scoped-region
+  "Render one scope-isolated persistent region. The route validates that the
+   requested DOM target belongs to the scope it resolves from the request, so
+   a surviving connection for one scope cannot patch another scope's mount."
+  ([view scope] (scoped-region view scope {}))
+  ([view scope attrs]
+   (when-not (scope-key? scope)
+     (throw (ex-info "scoped-region requires a stable scope key"
+                     {:view (:id view) :scope scope})))
+   (when (or (contains? attrs :id) (contains? attrs :data-star-init))
+     (throw (ex-info "local-view scoped region owns :id and :data-star-init"
+                     {:reserved (select-keys attrs [:id :data-star-init])})))
+   (let [region-id (scoped-region-id view scope)
+         separator (if (.contains ^String (:path view) "?") "&" "?")]
+     [:div (merge attrs
+                  {:id region-id
+                   :data-star-init
+                   (str "@get('" (:path view) separator
+                        "datastar-live-region=" region-id
+                        "',{openWhenHidden:false,retry:'always',retryMaxCount:1000000})")})])))
+
 (defn refresh!
   "Render and queue current authoritative state for one scope. Returns the
    number of matching connections scheduled."
@@ -573,16 +607,27 @@
   (let [hub (:hub view)
         selected (->> (:connections @(:state hub))
                       (keep (fn [[sse-gen {:keys [data]}]]
-                              (when (= scope (:scope data)) sse-gen)))
+                              (when (= scope (:scope data))
+                                [sse-gen (:region-id data)])))
                       vec)
-        html (rendered-html view scope)]
+        region-ids (if (seq selected)
+                     (set (map second selected))
+                     #{(:region-id view)})
+        html-by-region (into {}
+                             (map (fn [[_ region-id]]
+                                    [region-id (rendered-html view scope region-id)]))
+                             (map (fn [region-id] [nil region-id]) region-ids))]
     (locking (:enqueue-lock hub)
       (publish-selected!
-        hub selected :application
-        #(d*/patch-elements!
-           % html
-           {d*/selector (str "#" (:region-id view))
-            d*/patch-mode d*/pm-inner})))))
+        hub (mapv first selected) :application
+        (fn [sse-gen]
+          (let [region-id (some (fn [[candidate candidate-region]]
+                                  (when (= candidate sse-gen) candidate-region))
+                                selected)]
+            (d*/patch-elements!
+              sse-gen (get html-by-region region-id)
+              {d*/selector (str "#" region-id)
+               d*/patch-mode d*/pm-inner})))))))
 
 (defn connected-scopes
   "Return the stable scopes with at least one live connection to this view."
