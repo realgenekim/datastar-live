@@ -579,22 +579,39 @@
 (defn scoped-region
   "Render one scope-isolated persistent region. The route validates that the
    requested DOM target belongs to the scope it resolves from the request, so
-   a surviving connection for one scope cannot patch another scope's mount."
-  ([view scope] (scoped-region view scope {}))
-  ([view scope attrs]
+   a surviving connection for one scope cannot patch another scope's mount.
+
+   Optional query params carry the application identity needed to derive the
+   same scope from the stream request. They are encoded here so callers never
+   have to rewrite the generated Datastar mount expression."
+  ([view scope] (scoped-region view scope {} {}))
+  ([view scope attrs] (scoped-region view scope attrs {}))
+  ([view scope attrs query-params]
    (when-not (scope-key? scope)
      (throw (ex-info "scoped-region requires a stable scope key"
                      {:view (:id view) :scope scope})))
    (when (or (contains? attrs :id) (contains? attrs :data-star-init))
      (throw (ex-info "local-view scoped region owns :id and :data-star-init"
                      {:reserved (select-keys attrs [:id :data-star-init])})))
+   (when-not (map? query-params)
+     (throw (ex-info "local-view scoped region query params must be a map"
+                     {:query-params query-params})))
+   (when (or (contains? query-params :datastar-live-region)
+             (contains? query-params "datastar-live-region"))
+     (throw (ex-info "local-view owns the datastar-live-region query param" {})))
    (let [region-id (scoped-region-id view scope)
+         encode #(java.net.URLEncoder/encode (str %) "UTF-8")
+         query-string (->> (assoc query-params "datastar-live-region" region-id)
+                           (sort-by (comp str key))
+                           (map (fn [[k v]] (str (encode (if (keyword? k) (name k) k))
+                                              "=" (encode v))))
+                           (interpose "&")
+                           (apply str))
          separator (if (.contains ^String (:path view) "?") "&" "?")]
      [:div (merge attrs
                   {:id region-id
                    :data-star-init
-                   (str "@get('" (:path view) separator
-                        "datastar-live-region=" region-id
+                   (str "@get('" (:path view) separator query-string
                         "',{openWhenHidden:false,retry:'always',retryMaxCount:1000000})")})])))
 
 (defn refresh!

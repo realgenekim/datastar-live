@@ -190,25 +190,28 @@
         view (live/local-view
                {:id ::scoped-status
                 :path "/api/live/scoped-status"
-                :scope #(get-in % [:path-params :account])
+                :scope #(get-in % [:query-params "account"])
                 :render (fn [scope] [:span.status (str "account " scope)])})
         [_ route-data] (live/route view)
         handler (get-in route-data [:get :handler])
-        region-a (live/scoped-region view "a")
-        region-b (live/scoped-region view "b")
+        region-a (live/scoped-region view "a" {} {"account" "a"})
+        region-b (live/scoped-region view "b" {} {"account" "b"
+                                                  "return" "Charlotte, NC"})
         id-a (get-in region-a [1 :id])
         id-b (get-in region-b [1 :id])
         gen-a (at/->sse-recorder)
         gen-b (at/->sse-recorder)]
     (is (not= id-a id-b) "every persistent scope owns a distinct DOM target")
-    (is (str/includes? (get-in region-a [1 :data-star-init]) id-a))
-    (is (str/includes? (get-in region-b [1 :data-star-init]) id-b))
+    (is (str/includes? (get-in region-a [1 :data-star-init])
+                       (str "account=a&datastar-live-region=" id-a)))
+    (is (str/includes? (get-in region-b [1 :data-star-init])
+                       "return=Charlotte%2C+NC"))
     (with-redefs [hk/->sse-response (callbacks-response captured)]
-      (handler {:path-params {:account "a"}
-                :query-params {"datastar-live-region" id-a}})
+      (handler {:query-params {"account" "a"
+                               "datastar-live-region" id-a}})
       ((get @captured hk/on-open) gen-a)
-      (handler {:path-params {:account "b"}
-                :query-params {"datastar-live-region" id-b}})
+      (handler {:query-params {"account" "b"
+                               "datastar-live-region" id-b}})
       ((get @captured hk/on-open) gen-b)
       (is (true? (live/await-idle! (:hub view))))
       (let [events-a @(.-!rec gen-a)
