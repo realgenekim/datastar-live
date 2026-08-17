@@ -17,7 +17,7 @@
 (defrecord Hub [id state ^ExecutorService writer ^ScheduledThreadPoolExecutor scheduler
                 enqueue-lock on-event heartbeat-ms max-age-ms
                 recent-retirements-limit])
-(defrecord LocalView [id path scope render region-id hub])
+(defrecord LocalView [id path scope render signals region-id hub])
 
 (defn- now-ms [] (System/currentTimeMillis))
 
@@ -500,8 +500,10 @@
   "Create an opaque process-local view.
 
    Required options are a qualified keyword `:id`, absolute `:path`, request
-   to stable-key `:scope`, and scope to Hiccup `:render`."
-  [{:keys [id path scope render on-event]}]
+   to stable-key `:scope`, and scope to Hiccup `:render`. Optional `:signals`
+   maps a scope to a Datastar JSON signal patch. Element patches are always
+   written before signal patches."
+  [{:keys [id path scope render signals on-event]}]
   (when-not (qualified-id? id)
     (throw (ex-info "local-view :id must be a qualified keyword" {:id id})))
   (when-not (and (string? path) (.startsWith path "/"))
@@ -510,7 +512,10 @@
     (throw (ex-info "local-view :scope must be a function" {})))
   (when-not (fn? render)
     (throw (ex-info "local-view :render must be a function" {})))
-  (->LocalView id path scope render (hex-id id) (hub {:id id :on-event on-event})))
+  (when-not (or (nil? signals) (fn? signals))
+    (throw (ex-info "local-view :signals must be a function" {})))
+  (->LocalView id path scope render signals (hex-id id)
+               (hub {:id id :on-event on-event})))
 
 (defn- scoped-region-id [view scope]
   (hex-id [(:id view) scope]))
@@ -535,12 +540,22 @@
                       {:view (:id view) :region-id region-id})))
     html))
 
+(defn- rendered-signals [view scope]
+  (when-let [signals (:signals view)]
+    (let [payload (signals scope)]
+      (when-not (string? payload)
+        (throw (ex-info "local-view :signals must return a JSON string"
+                        {:view (:id view) :scope scope})))
+      payload)))
+
 (defn- write-view! [view sse-gen scope region-id]
   (d*/patch-elements!
     sse-gen
     (rendered-html view scope region-id)
     {d*/selector (str "#" region-id)
-     d*/patch-mode d*/pm-inner}))
+     d*/patch-mode d*/pm-inner})
+  (when-let [signals (rendered-signals view scope)]
+    (d*/patch-signals! sse-gen signals)))
 
 (defn route
   "Return the only documented Reitit route for a local view."
@@ -633,7 +648,8 @@
         html-by-region (into {}
                              (map (fn [[_ region-id]]
                                     [region-id (rendered-html view scope region-id)]))
-                             (map (fn [region-id] [nil region-id]) region-ids))]
+                             (map (fn [region-id] [nil region-id]) region-ids))
+        signals (rendered-signals view scope)]
     (locking (:enqueue-lock hub)
       (publish-selected!
         hub (mapv first selected) :application
@@ -644,7 +660,9 @@
             (d*/patch-elements!
               sse-gen (get html-by-region region-id)
               {d*/selector (str "#" region-id)
-               d*/patch-mode d*/pm-inner})))))))
+               d*/patch-mode d*/pm-inner})
+            (when signals
+              (d*/patch-signals! sse-gen signals))))))))
 
 (defn connected-scopes
   "Return the stable scopes with at least one live connection to this view."

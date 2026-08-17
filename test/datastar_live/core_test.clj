@@ -154,7 +154,9 @@
                 :scope #(get-in % [:identity :account])
                 :render (fn [scope]
                           (swap! rendered conj scope)
-                          [:span.status (str "account " scope)])})
+                          [:span.status (str "account " scope)])
+                :signals (fn [scope]
+                           (str "{\"validation\":\"" (name scope) "\"}"))})
         [_ route-data] (live/route view)
         handler (get-in route-data [:get :handler])
         region (live/region view {:class "slot"})
@@ -176,11 +178,19 @@
       (is (true? (live/await-idle! (:hub view))))
       (is (= [:a :b] @rendered))
       (is (= #{:a :b} (live/connected-scopes view)))
+      (doseq [[gen scope] [[gen-a "a"] [gen-b "b"]]]
+        (let [events @(.-!rec gen)]
+          (is (= 2 (count events)))
+          (is (str/includes? (first events) "event: datastar-patch-elements"))
+          (is (str/includes? (second events) "event: datastar-patch-signals"))
+          (is (str/includes? (second events) (str "\"validation\":\"" scope "\"")))))
 
       (reset! rendered [])
       (is (= 1 (live/refresh! view :a)))
       (is (true? (live/await-idle! (:hub view))))
       (is (= [:a] @rendered))
+      (is (= 4 (count @(.-!rec gen-a))))
+      (is (= 2 (count @(.-!rec gen-b))))
       (is (= #{:a :b} (live/connected-scopes view)))
       (is (= 2 (:connections (live/stats view)))))
     (live/stop! view)))
